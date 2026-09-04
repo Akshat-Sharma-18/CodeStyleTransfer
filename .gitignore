@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.ckpt
+*.pt
+*.safetensors
+data/raw/*
+!data/raw/.gitkeep
+data/pairs/*.tmp
+data/eval/*
+!data/eval/.gitkeep
+.ipynb_checkpoints/
+.DS_Store
