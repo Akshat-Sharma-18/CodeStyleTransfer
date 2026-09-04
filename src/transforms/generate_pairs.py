@@ -10,6 +10,7 @@ the whole point of Option A.
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from pathlib import Path
@@ -21,11 +22,13 @@ from runner.sandbox import run_against_tests  # noqa: E402
 from transforms.comments import strip_comments_and_docstrings  # noqa: E402
 from transforms.loops import for_range_to_while  # noqa: E402
 from transforms.rename import terse_rename  # noqa: E402
+from transforms.ternary import if_else_to_ternary  # noqa: E402
 
 TRANSFORMS = {
     "strip_comments": strip_comments_and_docstrings,
     "for_range_to_while": for_range_to_while,
     "terse_rename": lambda code: terse_rename(code).code,
+    "if_else_to_ternary": if_else_to_ternary,
 }
 
 
@@ -43,12 +46,17 @@ def generate() -> list[dict]:
 
         original_code = solution_path.read_text(encoding="utf-8")
         test_code = test_path.read_text(encoding="utf-8")
+        normalized_original = ast.unparse(ast.parse(original_code))
 
         for transform_name, transform_fn in TRANSFORMS.items():
             try:
                 transformed_code = transform_fn(original_code)
             except Exception as exc:  # noqa: BLE001 - log and skip malformed transforms
                 print(f"[skip] {problem_dir.name}/{transform_name}: {exc}")
+                continue
+
+            if transformed_code == normalized_original:
+                print(f"[skip] {problem_dir.name}/{transform_name}: no-op (pattern didn't match)")
                 continue
 
             result = run_against_tests(transformed_code, test_code)

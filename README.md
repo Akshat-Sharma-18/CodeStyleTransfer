@@ -11,20 +11,23 @@ See [SPEC.md](SPEC.md) for the full project spec.
 
 Week 1, in progress:
 
-- 5-problem corpus with test suites (`two_sum`, `fizzbuzz`, `is_palindrome`,
-  `fibonacci`, `max_subarray`)
+- 10-problem corpus with test suites (`two_sum`, `fizzbuzz`, `is_palindrome`,
+  `fibonacci`, `max_subarray`, `binary_search`, `valid_parentheses`,
+  `merge_intervals`, `reverse_words`, `count_vowels`)
 - Correctness runner (`src/runner/sandbox.py`): runs candidate code against a
   problem's pytest suite in a subprocess
-- Three mechanical transforms: identifier renaming, docstring/comment
-  stripping, `for range(...)` → `while` — all AST-based and behavior-preserving
+- Four mechanical transforms, all AST-based and behavior-preserving:
+  identifier renaming, docstring/comment stripping, `for range(...)` →
+  `while`, and `if/else` assignment → ternary
 - `src/transforms/generate_pairs.py` applies every transform to every
-  problem, verifies each result through the runner, and writes only the
-  ones that still pass to `data/pairs/mechanical_pairs.jsonl` — 15/15 pairs
-  currently verified
+  problem, skips no-ops (where a transform's pattern doesn't match),
+  verifies the rest through the runner, and writes only the ones that
+  still pass to `data/pairs/mechanical_pairs.jsonl` — 22 pairs currently
+  verified
 - Repo self-tests for the transforms and runner (`tests/`)
 
-Next: expand the problem corpus, add more transform types (expand/inline
-helpers, ternary ↔ if/else), then start the LoRA fine-tune (Week 2).
+Next: keep growing the corpus, add an expand/inline-helper transform, then
+start the LoRA fine-tune (Week 2).
 
 ## Layout
 
