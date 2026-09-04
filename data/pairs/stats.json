@@ -1,0 +1,12 @@
+{
+  "problems": 10,
+  "candidates": 102,
+  "verified": 102,
+  "failed_verification": 0,
+  "val_problems": [
+    "reverse_words",
+    "two_sum"
+  ],
+  "train_examples": 176,
+  "val_examples": 28
+}
