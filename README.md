@@ -28,9 +28,10 @@ Week 1 complete:
   by problem so validation problems are entirely unseen
 - 35 self-tests (`tests/`)
 
-Week 2 in progress: LoRA fine-tune (`src/model/train_lora.py`), with the model
-wrapped as the same `(code, direction) -> code` callable the baselines use
-(`src/model/rewriter.py`) so it is scored by an identical harness.
+Week 2 complete: LoRA fine-tune of CodeT5+ 220M (`src/model/train_lora.py`),
+with the model wrapped as the same `(code, direction) -> code` callable the
+baselines use (`src/model/rewriter.py`) so it is scored by an identical
+harness. See **Result** below.
 
 Week 3 work brought forward (the eval harness, built before training so that
 training results can be trusted):
@@ -48,6 +49,57 @@ training results can be trusted):
 - Alternate implementations (`problems/*/solution_alt.py`) for four problems:
   genuinely different algorithms that pass the same tests, so the cheat
   detector is *validated* rather than merely asserted
+
+## Result
+
+120 sampled validation examples, beam search (4 beams), every row scored by the
+same harness:
+
+| rewriter | parse | correct | style | content | cheat? | →terse | →verbose |
+|---|---|---|---|---|---|---|---|
+| rule_based | 100% | **100%** | 34% | 0.999 | 0% | 46% | 22% |
+| base (prompt-only) | 17% | 0% | 10% | 0.256 | 0% | 46%* | 86%* |
+| adapter (fine-tuned) | 99% | **95%** | 31% | 0.984 | 0% | 38% | 24% |
+
+<sub>*The base row's per-direction figures were computed over its parsed 17%
+only, so they overstate badly — 86% of almost nothing. That inconsistency is
+fixed in the harness (per-direction now counts every attempt, unparsed as a
+miss); the table is left as the run produced it rather than silently restating
+numbers that were not measured. The other two rows parse at 99–100%, where the
+distinction is immaterial.</sub>
+
+**The fine-tune clears the spec's v2 bar.** Against the prompt-only backbone it
+goes 0% → 95% functional correctness, 17% → 99% parse rate, and 0.256 → 0.984
+content preservation. Prompting a 220M code model to do this task does not
+work; training it does. That comparison is what justifies training at all.
+
+**It does not beat the rule-based baseline.** The honest reading is that it
+roughly matches it while losing slightly on every axis: 95% vs 100% correct,
+31% vs 34% style, 0.984 vs 0.999 content. A model that merely ties a scripted
+transform is not yet a reason to prefer the model. Its case has to be
+generalization beyond the seven scripted transforms — which is precisely what
+the Option B held-out real pairs are for, and what this corpus cannot yet show.
+
+Cheat rate is 0% on every row and content scores sit far above the 0.70
+threshold, so the model is genuinely rewriting its input rather than emitting
+memorized solutions.
+
+Reproduce: `python src/eval/run_model_eval.py --split val --limit 120`
+
+### The training bug this table found
+
+The first fine-tune scored 45% parse, 27% correct, 0.595 content, and tripped
+the cheat detector on 4% of examples — its worst output was the same function
+emitted six times with renamed variables. The cause was not the model but the
+tokenizer workaround: building the BPE backend from raw `vocab.json` +
+`merges.txt` drops the post-processing template, so `tokenizer(target)`
+returned no `</s>`, seq2seq labels carried no EOS, and the model was never
+taught where to stop.
+
+Nothing crashed, no test failed, and **training loss fell the whole way**
+(0.82 train / 0.15 eval). The bug was visible only as a mediocre score against
+a non-learned baseline. That is the argument for building the eval harness
+before the model rather than reading loss curves.
 
 ## What the eval already showed
 
@@ -143,13 +195,16 @@ deadline, and reported separately from real test failures.
   `src/model/tokenizer_compat.py` builds the byte-level BPE backend straight
   from `vocab.json` + `merges.txt` instead, which round-trips Python source
   exactly. The alternative was pinning transformers to 4.x project-wide.
-- **No trained model exists yet.** Everything above is data and eval
-  infrastructure. The numbers in this README are baselines, not results.
-  Training is currently blocked on downloading the backbone weights: this
-  machine is pulling from HuggingFace at ~0.17 MB/s with frequent stalls, so
-  the 892MB checkpoint has not finished arriving. Nothing about the pipeline
-  is waiting on it — `train_lora.py` and `rewriter.py` are written and the
-  eval harness scores a model through exactly the same path as the baselines.
+- **The model ties the rule-based baseline rather than beating it.** It
+  decisively beats prompt-only, which is the spec's stated bar, but a scripted
+  transform still matches it on in-distribution data. The case for the model
+  has to be generalization beyond the scripted transform space, and that needs
+  the Option B held-out real pairs the corpus does not yet have.
+- **The eval samples 120 examples, not the full 1,280-example split.** Beam
+  search runs at roughly 20s per example, so the full split would take hours.
+  The reported rates therefore carry sampling noise on the order of a few
+  percent, which is wide enough that the 95%-vs-100% correctness gap is real
+  but the 31%-vs-34% style gap is not clearly outside it.
 
 ## Reproducing the data
 

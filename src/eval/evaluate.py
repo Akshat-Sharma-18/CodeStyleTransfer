@@ -121,12 +121,12 @@ def _score_one(rewriter: Rewriter, example: dict) -> dict:
     try:
         rewrite = rewriter(source, direction)
     except Exception as exc:  # noqa: BLE001 - a rewriter that blew up scores as a failure
-        return {"parsed": False, "passed": False, "style_hit": False, "content": None, "error": str(exc)}
+        return {"parsed": False, "passed": False, "style_hit": False, "content": None, "direction": direction, "error": str(exc)}
 
     try:
         ast.parse(rewrite)
     except SyntaxError as exc:
-        return {"parsed": False, "passed": False, "style_hit": False, "content": None, "error": str(exc)}
+        return {"parsed": False, "passed": False, "style_hit": False, "content": None, "direction": direction, "error": str(exc)}
 
     passed = run_against_tests(rewrite, tests_for(example["problem"])).passed
 
@@ -137,7 +137,7 @@ def _score_one(rewriter: Rewriter, example: dict) -> dict:
             style_hit = moved_toward_terse(rewrite, source)
         content = content_score(source, rewrite)
     except SyntaxError as exc:
-        return {"parsed": False, "passed": False, "style_hit": False, "content": None, "error": str(exc)}
+        return {"parsed": False, "passed": False, "style_hit": False, "content": None, "direction": direction, "error": str(exc)}
 
     return {
         "parsed": True,
@@ -159,6 +159,16 @@ def evaluate(name: str, rewriter: Rewriter, examples: list[dict], workers: int =
 
     for outcome in outcomes:
         result.total += 1
+
+        # Counted for every attempt, parsed or not. Scoring the per-direction
+        # rates over only the parsed subset while the headline style rate is
+        # over all attempts makes the two columns silently incomparable: a
+        # rewriter that parses 17% of the time showed 10% overall style against
+        # 46%/86% per direction, which reads as a strength rather than as
+        # "almost everything it emitted was unparseable".
+        if outcome["direction"] is not None:
+            result.note_direction(outcome["direction"], bool(outcome["style_hit"]), bool(outcome["passed"]))
+
         if not outcome["parsed"]:
             continue
 
@@ -167,7 +177,6 @@ def evaluate(name: str, rewriter: Rewriter, examples: list[dict], workers: int =
             result.passed_tests += 1
         if outcome["style_hit"]:
             result.style_hits += 1
-        result.note_direction(outcome["direction"], outcome["style_hit"], outcome["passed"])
 
         content = outcome["content"]
         result.content_scores.append(content["content_score"])
