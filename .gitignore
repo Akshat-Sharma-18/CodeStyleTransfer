@@ -13,3 +13,8 @@ data/eval/*
 !data/eval/.gitkeep
 .ipynb_checkpoints/
 .DS_Store
+data/checkpoints/
+# Corpus and pairs are derived from MBPP and are regenerable from the scripts
+# (see README "Reproducing the data"), so they are not redistributed here.
+data/corpus/*.jsonl
+data/pairs/*.jsonl

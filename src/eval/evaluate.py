@@ -28,6 +28,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
+from corpus import tests_for  # noqa: E402
 from eval.content_preservation import content_score  # noqa: E402
 from eval.style_proxies import moved_toward_terse  # noqa: E402
 from runner.sandbox import run_against_tests  # noqa: E402
@@ -88,10 +89,6 @@ def load_examples(split_path: Path) -> list[dict]:
     return [json.loads(line) for line in split_path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def _test_code_for(problem: str) -> str:
-    return (ROOT / "problems" / problem / "test_solution.py").read_text(encoding="utf-8")
-
-
 def _strip_style_token(text: str) -> str:
     lines = text.splitlines()
     if lines and lines[0].strip().startswith("<to_"):
@@ -113,14 +110,16 @@ def _score_one(rewriter: Rewriter, example: dict) -> dict:
     except SyntaxError as exc:
         return {"parsed": False, "passed": False, "style_hit": False, "content": None, "error": str(exc)}
 
-    passed = run_against_tests(rewrite, _test_code_for(example["problem"])).passed
+    passed = run_against_tests(rewrite, tests_for(example["problem"])).passed
 
-    if direction == "to_terse":
-        style_hit = moved_toward_terse(source, rewrite)
-    else:
-        style_hit = moved_toward_terse(rewrite, source)
-
-    content = content_score(source, rewrite)
+    try:
+        if direction == "to_terse":
+            style_hit = moved_toward_terse(source, rewrite)
+        else:
+            style_hit = moved_toward_terse(rewrite, source)
+        content = content_score(source, rewrite)
+    except SyntaxError as exc:
+        return {"parsed": False, "passed": False, "style_hit": False, "content": None, "error": str(exc)}
 
     return {
         "parsed": True,

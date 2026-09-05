@@ -31,6 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
+from corpus import Problem, load_corpus  # noqa: E402
 from eval.style_proxies import moved_toward_terse  # noqa: E402
 from runner.sandbox import run_against_tests  # noqa: E402
 from transforms.annotations import strip_annotations  # noqa: E402
@@ -69,16 +70,13 @@ def _apply_subset(source: str, names: tuple[str, ...]) -> str | None:
     return code
 
 
-def _collect_candidates(problem_dir: Path, max_subset_size: int) -> tuple[str, str, dict[str, tuple[str, ...]]]:
-    """Return (original_code, test_code, {variant_code: transform_names})."""
-    raw_original = (problem_dir / "solution.py").read_text(encoding="utf-8")
-    test_code = (problem_dir / "test_solution.py").read_text(encoding="utf-8")
-
+def _collect_candidates(problem: Problem, max_subset_size: int) -> tuple[str, dict[str, tuple[str, ...]]]:
+    """Return (original_code, {variant_code: transform_names})."""
     # Round-trip the original through ast.unparse too. Every variant is
     # unparsed output, so leaving the original as raw file text would leak a
     # trivial cue (quote style, spacing) that correlates perfectly with the
     # style label -- the model would learn the formatter, not the style.
-    original_code = ast.unparse(ast.parse(raw_original))
+    original_code = ast.unparse(ast.parse(problem.solution))
 
     variants: dict[str, tuple[str, ...]] = {}
     names = list(TRANSFORMS)
@@ -91,58 +89,62 @@ def _collect_candidates(problem_dir: Path, max_subset_size: int) -> tuple[str, s
             if variant not in variants or len(subset) < len(variants[variant]):
                 variants[variant] = subset
 
-    return original_code, test_code, variants
+    return original_code, variants
 
 
-def _verify(args: tuple[str, str]) -> bool:
-    variant_code, test_code = args
-    return run_against_tests(variant_code, test_code).passed
+def _process_problem(problem: Problem, max_subset_size: int) -> tuple[list[dict], int]:
+    """Generate, verify and orient every variant for one problem."""
+    try:
+        original_code, variants = _collect_candidates(problem, max_subset_size)
+    except SyntaxError:
+        return [], 0
 
+    kept = []
+    failed = 0
+    for variant_code, recipe in variants.items():
+        if not run_against_tests(variant_code, problem.tests).passed:
+            failed += 1
+            continue
 
-def build(max_subset_size: int, val_fraction: float, seed: int, workers: int) -> dict:
-    problems_dir = ROOT / "problems"
-    pairs_dir = ROOT / "data" / "pairs"
-    pairs_dir.mkdir(parents=True, exist_ok=True)
-
-    problem_dirs = sorted(
-        d for d in problems_dir.iterdir() if (d / "solution.py").exists() and (d / "test_solution.py").exists()
-    )
-
-    stats = {"problems": len(problem_dirs), "candidates": 0, "verified": 0, "failed_verification": 0}
-    pairs_by_problem: dict[str, list[dict]] = {}
-
-    for problem_dir in problem_dirs:
-        original_code, test_code, variants = _collect_candidates(problem_dir, max_subset_size)
-        stats["candidates"] += len(variants)
-
-        variant_list = list(variants)
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            passed_flags = list(pool.map(_verify, [(v, test_code) for v in variant_list]))
-
-        kept = []
-        for variant_code, passed in zip(variant_list, passed_flags):
-            if not passed:
-                stats["failed_verification"] += 1
-                continue
-
-            # Let the style proxies decide which side is the verbose one.
+        # Let the style proxies decide which side is the verbose one.
+        try:
             if moved_toward_terse(original_code, variant_code):
                 verbose_code, terse_code = original_code, variant_code
             else:
                 verbose_code, terse_code = variant_code, original_code
+        except SyntaxError:
+            continue
 
-            kept.append(
-                {
-                    "problem": problem_dir.name,
-                    "transforms": list(variants[variant_code]),
-                    "verbose": verbose_code,
-                    "terse": terse_code,
-                }
-            )
+        kept.append(
+            {
+                "problem": problem.name,
+                "transforms": list(recipe),
+                "verbose": verbose_code,
+                "terse": terse_code,
+            }
+        )
+    return kept, failed
 
+
+def build(max_subset_size: int, val_fraction: float, seed: int, workers: int) -> dict:
+    pairs_dir = ROOT / "data" / "pairs"
+    pairs_dir.mkdir(parents=True, exist_ok=True)
+
+    problems = load_corpus()
+    stats = {"problems": len(problems), "candidates": 0, "verified": 0, "failed_verification": 0}
+    pairs_by_problem: dict[str, list[dict]] = {}
+
+    # Parallelize across problems: the test runs dominate, and one problem's
+    # variants are a small batch on their own.
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        outcomes = list(pool.map(lambda p: _process_problem(p, max_subset_size), problems))
+
+    for problem, (kept, failed) in zip(problems, outcomes):
+        stats["candidates"] += len(kept) + failed
+        stats["failed_verification"] += failed
         stats["verified"] += len(kept)
-        pairs_by_problem[problem_dir.name] = kept
-        print(f"{problem_dir.name:20s} {len(variants):4d} candidates -> {len(kept):4d} verified pairs")
+        if kept:
+            pairs_by_problem[problem.name] = kept
 
     # Split by problem so validation problems are entirely unseen.
     problem_names = sorted(pairs_by_problem)
