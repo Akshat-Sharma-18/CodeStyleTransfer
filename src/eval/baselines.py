@@ -25,7 +25,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
 from transforms.annotations import strip_annotations  # noqa: E402
+from transforms.augassign import expand_aug_assign  # noqa: E402
 from transforms.comments import strip_comments_and_docstrings  # noqa: E402
+from transforms.comprehension import expand_comprehension  # noqa: E402
 from transforms.rename import terse_rename  # noqa: E402
 
 
@@ -66,14 +68,39 @@ def make_canonical_cheat(problem: str):
 def rule_based_rewriter(code: str, direction: str) -> str:
     """An honest non-learned rewriter: apply the mechanical transforms directly.
 
-    This is the bar a fine-tuned model has to clear to justify training at all.
-    On in-distribution (Option A) data it should be near-perfect by
-    construction -- the interesting question is how it does on real pairs.
+    This is the bar a fine-tuned model has to clear to justify training at all,
+    so it is worth making it as strong as the transform set allows rather than
+    leaving it a straw man.
+
+    The two directions are not symmetric, but not in the direction intuition
+    suggests. The obvious story is that going terse is easy (delete docstrings
+    and annotations, shorten names) while going verbose is hard (the
+    information being added is not recoverable from the code). Measured on the
+    MBPP validation split, this baseline hits the target style 36% of the time
+    going verbose and only 15% going terse.
+
+    The reason is the corpus, not the task: MBPP solutions mostly arrive with
+    no docstrings and no type annotations, so two of the three terse-direction
+    transforms have nothing to delete and only renaming fires -- which on its
+    own rarely flips a majority of the style proxies. The verbose direction's
+    two structural expansions change line and token counts every time they
+    fire, so they clear the majority vote more often.
+
+    Worth keeping in the writeup: "terse is the easy direction" is true of the
+    *task* and false of this *baseline on this corpus*, and only measuring
+    per-direction shows the difference.
     """
     if direction == "to_terse":
         code = strip_comments_and_docstrings(code)
         code = strip_annotations(code)
         return terse_rename(code).code
+
+    # to_verbose: structural expansion only -- no way to invent names or docs.
+    for transform in (expand_comprehension, expand_aug_assign):
+        try:
+            code = transform(code)
+        except Exception:  # noqa: BLE001 - a transform that cannot handle this code
+            pass
     return ast.unparse(ast.parse(code))
 
 

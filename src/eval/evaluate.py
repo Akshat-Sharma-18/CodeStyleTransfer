@@ -56,6 +56,22 @@ class EvalResult:
     style_hits: int = 0
     content_scores: list[float] = field(default_factory=list)
     suspected_cheats: list[dict] = field(default_factory=list)
+    # Per-direction, because the two are not the same task: going terse is
+    # deletion, going verbose requires inventing information that is not in
+    # the input. A single averaged style number hides that completely.
+    per_direction: dict[str, dict[str, int]] = field(default_factory=dict)
+
+    def note_direction(self, direction: str, style_hit: bool, passed: bool) -> None:
+        bucket = self.per_direction.setdefault(direction, {"n": 0, "style_hits": 0, "passed": 0})
+        bucket["n"] += 1
+        bucket["style_hits"] += int(style_hit)
+        bucket["passed"] += int(passed)
+
+    def direction_style_rate(self, direction: str) -> float | None:
+        bucket = self.per_direction.get(direction)
+        if not bucket or not bucket["n"]:
+            return None
+        return bucket["style_hits"] / bucket["n"]
 
     @property
     def functional_correctness(self) -> float:
@@ -82,6 +98,8 @@ class EvalResult:
             "style_hit_rate": self.style_hit_rate,
             "mean_content_score": self.mean_content_score,
             "suspected_cheat_rate": self.suspected_cheat_rate,
+            "style_hit_to_terse": self.direction_style_rate("to_terse"),
+            "style_hit_to_verbose": self.direction_style_rate("to_verbose"),
         }
 
 
@@ -149,6 +167,7 @@ def evaluate(name: str, rewriter: Rewriter, examples: list[dict], workers: int =
             result.passed_tests += 1
         if outcome["style_hit"]:
             result.style_hits += 1
+        result.note_direction(outcome["direction"], outcome["style_hit"], outcome["passed"])
 
         content = outcome["content"]
         result.content_scores.append(content["content_score"])
@@ -176,9 +195,14 @@ def format_table(results: list[EvalResult]) -> str:
         ("style", 7),
         ("content", 9),
         ("cheat?", 7),
+        ("->terse", 8),
+        ("->verbose", 9),
     ]
     lines = ["  ".join(name.ljust(width) for name, width in headers)]
     lines.append("-" * (sum(width for _, width in headers) + 2 * (len(headers) - 1)))
+
+    def rate(value: float | None, width: int) -> str:
+        return ("--" if value is None else f"{value:.0%}").ljust(width)
 
     for result in results:
         row = result.as_row()
@@ -192,6 +216,8 @@ def format_table(results: list[EvalResult]) -> str:
                     f"{row['style_hit_rate']:.0%}".ljust(7),
                     f"{row['mean_content_score']:.3f}".ljust(9),
                     f"{row['suspected_cheat_rate']:.0%}".ljust(7),
+                    rate(result.direction_style_rate("to_terse"), 8),
+                    rate(result.direction_style_rate("to_verbose"), 9),
                 ]
             )
         )

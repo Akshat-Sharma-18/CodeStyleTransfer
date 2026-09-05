@@ -118,12 +118,15 @@ deadline, and reported separately from real test failures.
   type annotations, so two of the seven transforms simply never fire on them.
   The style space is genuinely narrow, and the writeup should say so rather
   than implying the model learned "terseness" in general.
-- **`to_verbose` has almost no rule-based floor.** On real MBPP code the
-  rule-based baseline hits the target style only 8% of the time (it was 48%
-  on the hand-written corpus, which was rich in docstrings and annotations).
-  Nothing in the transform set *adds* comments or expands names, so the
-  verbose direction is close to unimplemented mechanically. Good news for
-  headroom, but it means "beat the rule-based baseline" is a low bar there.
+- **The style bar is low, and asymmetric in the counterintuitive direction.**
+  The rule-based baseline hits the target style 26% of the time on real MBPP
+  code (48% on the hand-written corpus, which was rich in docstrings and
+  annotations). Split by direction it is 15% going terse and **36% going
+  verbose** — the opposite of the obvious story, because MBPP solutions
+  mostly arrive with nothing to delete, so the terse direction's transforms
+  never fire while the verbose direction's structural expansions do. "Terse
+  is the easy direction" is true of the task and false of this baseline on
+  this corpus; only per-direction reporting shows it.
 - **The cheat detector's threshold is calibrated, not derived.** The
   separation holds across 3,278 real pairs, but the four cheats it is scored
   against are still hand-written, and the control-flow term was added
