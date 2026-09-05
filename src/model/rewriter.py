@@ -36,11 +36,13 @@ class ModelRewriter:
         device: str | None = None,
     ) -> None:
         import torch
-        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+        from transformers import AutoModelForSeq2SeqLM
+
+        from model.tokenizer_compat import load_tokenizer
 
         self.torch = torch
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.tokenizer = AutoTokenizer.from_pretrained(adapter_path or model_name)
+        self.tokenizer = load_tokenizer(model_name, model_max_length=max_source)
         model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
 
         if adapter_path:

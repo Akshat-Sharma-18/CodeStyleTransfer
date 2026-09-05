@@ -1,26 +1,18 @@
 """LoRA fine-tune of a small code model for style transfer.
 
-Backbone: Qwen2.5-Coder-0.5B, decoder-only.
+Backbone: CodeT5+ 220M, an encoder-decoder, as the spec recommends. Seq2seq is
+the natural shape here -- the task is literally "this code in, that code out"
+-- and at 220M it fits an 8GB card with room for a real batch size.
 
-The spec suggests CodeT5/CodeT5+ (encoder-decoder) first, and that was the
-original choice here. It does not work on this machine: every CodeT5 tokenizer
-still ships the legacy `{"content": ..., "__type": "AddedToken"}` config form,
-which transformers 5.16 no longer converts before calling `add_tokens`, so
-loading dies with `TypeError: Input must be a List[Union[str, AddedToken]]`.
-Slow and fast paths both fail, and there is no `tokenizer.json` to bypass it
-with. Pinning an old transformers release to rescue a 2021 checkpoint is worse
-than taking the spec's other sanctioned option -- decoder-only -- with a model
-whose tokenizer loads.
+Its tokenizer needs a workaround to load at all under transformers 5.x; see
+`tokenizer_compat.py` for why.
 
 Both directions live in one model. The style token (`<to_terse>` /
-`<to_verbose>`) is the first line of every input, so direction is part of the
-prompt rather than a separate head. The tokens are left as ordinary subwords
-rather than registered as special: adding them resizes the embedding matrix,
-which then has to be trained alongside the adapters. Revisit only if the model
-turns out to ignore the direction.
-
-Loss is masked to the completion only -- the model is scored on the rewrite it
-produces, never on reciting the prompt back.
+`<to_verbose>`) is the first line of every input, so the direction is part of
+the prompt rather than a separate head. The tokens are left as ordinary
+subwords rather than registered as special: adding them resizes the embedding
+matrix, which then has to be trained alongside the adapters. Revisit only if
+the model turns out to ignore the direction.
 """
 
 from __future__ import annotations
@@ -33,9 +25,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-DEFAULT_MODEL = "Qwen/Qwen2.5-Coder-0.5B"
+from model.tokenizer_compat import load_tokenizer  # noqa: E402
 
-PROMPT_TEMPLATE = "# rewrite the following python function\n{style}\n{code}\n# rewritten:\n"
+DEFAULT_MODEL = "Salesforce/codet5p-220m"
 
 
 def load_split(split: str) -> list[dict]:
@@ -45,57 +37,35 @@ def load_split(split: str) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def format_prompt(style_token: str, code: str) -> str:
-    return PROMPT_TEMPLATE.format(style=style_token, code=code)
-
-
-def split_input(example: dict) -> tuple[str, str]:
-    """The dataset stores '<to_terse>\\n<code>'; separate the two."""
-    head, _, body = example["input"].partition("\n")
-    return head.strip(), body
-
-
 class PairDataset:
-    """Prompt + completion, with the prompt masked out of the loss."""
-
-    def __init__(self, examples: list[dict], tokenizer, max_length: int) -> None:
+    def __init__(self, examples: list[dict], tokenizer, max_source: int, max_target: int) -> None:
         self.examples = examples
         self.tokenizer = tokenizer
-        self.max_length = max_length
+        self.max_source = max_source
+        self.max_target = max_target
 
     def __len__(self) -> int:
         return len(self.examples)
 
     def __getitem__(self, index: int) -> dict:
         example = self.examples[index]
-        style_token, code = split_input(example)
-        prompt = format_prompt(style_token, code)
-        completion = example["target"] + self.tokenizer.eos_token
-
-        prompt_ids = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
-        completion_ids = self.tokenizer(completion, add_special_tokens=False)["input_ids"]
-
-        input_ids = (prompt_ids + completion_ids)[: self.max_length]
-        # -100 tells the loss to ignore the prompt tokens.
-        labels = ([-100] * len(prompt_ids) + completion_ids)[: self.max_length]
-
-        return {
-            "input_ids": input_ids,
-            "attention_mask": [1] * len(input_ids),
-            "labels": labels,
-        }
+        model_inputs = self.tokenizer(example["input"], max_length=self.max_source, truncation=True)
+        labels = self.tokenizer(example["target"], max_length=self.max_target, truncation=True)
+        model_inputs["labels"] = labels["input_ids"]
+        return model_inputs
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--epochs", type=float, default=3.0)
-    parser.add_argument("--batch-size", type=int, default=2)
-    parser.add_argument("--grad-accum", type=int, default=8)
-    parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--grad-accum", type=int, default=4)
+    parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)
-    parser.add_argument("--max-length", type=int, default=768)
+    parser.add_argument("--max-source", type=int, default=512)
+    parser.add_argument("--max-target", type=int, default=512)
     parser.add_argument("--output", default=str(ROOT / "data" / "checkpoints" / "lora"))
     parser.add_argument("--limit", type=int, default=None, help="truncate the training set (smoke tests)")
     args = parser.parse_args()
@@ -103,11 +73,10 @@ def main() -> None:
     import torch
     from peft import LoraConfig, TaskType, get_peft_model
     from transformers import (
-        AutoModelForCausalLM,
-        AutoTokenizer,
+        AutoModelForSeq2SeqLM,
         DataCollatorForSeq2Seq,
-        Trainer,
-        TrainingArguments,
+        Seq2SeqTrainer,
+        Seq2SeqTrainingArguments,
     )
 
     train_examples = load_split("train")
@@ -117,28 +86,21 @@ def main() -> None:
         val_examples = val_examples[: max(8, args.limit // 8)]
     print(f"train {len(train_examples)} | val {len(val_examples)}")
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    use_cuda = torch.cuda.is_available()
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model,
-        dtype=torch.bfloat16 if use_cuda else torch.float32,
-    )
-    model.config.use_cache = False
+    tokenizer = load_tokenizer(args.model, model_max_length=args.max_source)
+    model = AutoModelForSeq2SeqLM.from_pretrained(args.model)
 
     lora_config = LoraConfig(
-        task_type=TaskType.CAUSAL_LM,
+        task_type=TaskType.SEQ_2_SEQ_LM,
         r=args.lora_r,
         lora_alpha=args.lora_alpha,
         lora_dropout=0.05,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        target_modules=["q", "v"],
     )
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
-    training_args = TrainingArguments(
+    use_cuda = torch.cuda.is_available()
+    training_args = Seq2SeqTrainingArguments(
         output_dir=args.output,
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
@@ -151,18 +113,17 @@ def main() -> None:
         eval_strategy="epoch",
         save_strategy="epoch",
         save_total_limit=1,
-        bf16=use_cuda,
+        fp16=use_cuda,
         report_to=[],
         remove_unused_columns=False,
-        gradient_checkpointing=use_cuda,
     )
 
-    trainer = Trainer(
+    trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
-        train_dataset=PairDataset(train_examples, tokenizer, args.max_length),
-        eval_dataset=PairDataset(val_examples, tokenizer, args.max_length),
-        data_collator=DataCollatorForSeq2Seq(tokenizer, padding="longest", label_pad_token_id=-100),
+        train_dataset=PairDataset(train_examples, tokenizer, args.max_source, args.max_target),
+        eval_dataset=PairDataset(val_examples, tokenizer, args.max_source, args.max_target),
+        data_collator=DataCollatorForSeq2Seq(tokenizer, model=model, padding="longest"),
     )
 
     trainer.train()

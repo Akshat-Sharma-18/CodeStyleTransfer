@@ -132,15 +132,22 @@ deadline, and reported separately from real test failures.
   `ast.unparse`, which drops `#` comments, so only docstrings survive.
   Preserving real comments needs a concrete-syntax pipeline (libcst) rather
   than `ast`.
-- **The backbone is not the one the spec suggests.** CodeT5/CodeT5+ was the
-  intended encoder-decoder, but every CodeT5 tokenizer still ships the legacy
-  `{"content": ..., "__type": "AddedToken"}` config form, which transformers
-  5.16 refuses to load (`TypeError: Input must be a List[Union[str,
-  AddedToken]]`) on both the fast and slow paths, with no `tokenizer.json` to
-  bypass it. Rather than pin an old transformers release, this uses
-  Qwen2.5-Coder-0.5B — decoder-only, which the spec also sanctions.
+- **The CodeT5 tokenizer needs a workaround to load at all.** Every CodeT5
+  checkpoint still ships the legacy `{"content": ..., "__type": "AddedToken"}`
+  config form, which transformers 5.x refuses (`TypeError: Input must be a
+  List[Union[str, AddedToken]]`) on both the fast and slow paths, with no
+  `tokenizer.json` to load directly and a fast-conversion fallback that has to
+  instantiate the very slow tokenizer that crashes.
+  `src/model/tokenizer_compat.py` builds the byte-level BPE backend straight
+  from `vocab.json` + `merges.txt` instead, which round-trips Python source
+  exactly. The alternative was pinning transformers to 4.x project-wide.
 - **No trained model exists yet.** Everything above is data and eval
   infrastructure. The numbers in this README are baselines, not results.
+  Training is currently blocked on downloading the backbone weights: this
+  machine is pulling from HuggingFace at ~0.17 MB/s with frequent stalls, so
+  the 892MB checkpoint has not finished arriving. Nothing about the pipeline
+  is waiting on it — `train_lora.py` and `rewriter.py` are written and the
+  eval harness scores a model through exactly the same path as the baselines.
 
 ## Reproducing the data
 
