@@ -11,17 +11,22 @@ See [SPEC.md](SPEC.md) for the full project spec.
 
 Week 1 complete:
 
-- **977-problem corpus**: 10 hand-written problems plus 967 from MBPP, every
-  one carrying an executable test suite. `src/corpus.py` presents both behind
-  one interface; `src/data/ingest_mbpp.py` does the conversion
+- **1,141-problem corpus**: 10 hand-written, 967 from MBPP, 164 from
+  HumanEval — every one carrying an executable test suite. `src/corpus.py`
+  presents all three behind one interface. The two sources are stylistically
+  complementary and deliberately so: MBPP supplies terse, undocumented code
+  (0.0% docstrings), HumanEval supplies the documented end (99.4% docstrings,
+  36.6% annotations). HumanEval yields 10.4 verified style variants per
+  problem against MBPP's 3.2, precisely because the terse-direction transforms
+  finally have something to remove
 - **Correctness runner** (`src/runner/sandbox.py`): runs candidate code
   against a problem's pytest suite in an isolated subprocess
 - **Seven mechanical transforms**, all AST-based: identifier renaming,
   docstring stripping, type-annotation stripping, `for range(...)` → `while`,
   `if/else` → ternary, augmented-assignment expansion, comprehension expansion
-- **4,026 verified pairs** (3,278 train / 748 val) in `data/pairs/`, split by
-  problem so validation problems are entirely unseen
-- 32 self-tests (`tests/`)
+- **6,216 verified pairs** (4,936 train / 1,280 val) in `data/pairs/`, split
+  by problem so validation problems are entirely unseen
+- 35 self-tests (`tests/`)
 
 Week 2 in progress: LoRA fine-tune (`src/model/train_lora.py`), with the model
 wrapped as the same `(code, direction) -> code` callable the baselines use
@@ -43,9 +48,6 @@ training results can be trusted):
 - Alternate implementations (`problems/*/solution_alt.py`) for four problems:
   genuinely different algorithms that pass the same tests, so the cheat
   detector is *validated* rather than merely asserted
-
-Next: LoRA fine-tune (Week 2 proper). Blocked on a data-volume decision —
-see "Honest status" below.
 
 ## What the eval already showed
 
@@ -113,20 +115,17 @@ deadline, and reported separately from real test failures.
 
 ## Honest status and known limits
 
-- **Only ~2 style variants per problem.** 4,026 examples across 977 problems
-  is enough to train on, but most MBPP solutions carry no docstrings and no
-  type annotations, so two of the seven transforms simply never fire on them.
-  The style space is genuinely narrow, and the writeup should say so rather
-  than implying the model learned "terseness" in general.
-- **The style bar is low, and asymmetric in the counterintuitive direction.**
-  The rule-based baseline hits the target style 26% of the time on real MBPP
-  code (48% on the hand-written corpus, which was rich in docstrings and
-  annotations). Split by direction it is 15% going terse and **36% going
-  verbose** — the opposite of the obvious story, because MBPP solutions
-  mostly arrive with nothing to delete, so the terse direction's transforms
-  never fire while the verbose direction's structural expansions do. "Terse
-  is the easy direction" is true of the task and false of this baseline on
-  this corpus; only per-direction reporting shows it.
+- **The style space is bounded by the seven scripted transforms.** That is
+  inherent to the spec's Option A, and the writeup should say so rather than
+  implying the model learned "terseness" in general. The corpus now spans both
+  ends of the axis, but only along the axes the transforms encode.
+- **The style numbers are partly a statement about the corpus.** On MBPP alone
+  the rule-based baseline scored 15% going terse against 36% going verbose —
+  backwards from the obvious story. The diagnosis was that 0.0% of MBPP
+  solutions carry a docstring or annotation, so the terse transforms had
+  nothing to delete. Adding HumanEval (99.4% docstrings) tested that
+  prediction: terse went **15% → 45%** and the ordering flipped back. A single
+  averaged style figure would have hidden the entire effect.
 - **The cheat detector's threshold is calibrated, not derived.** The
   separation holds across 3,278 real pairs, but the four cheats it is scored
   against are still hand-written, and the control-flow term was added
@@ -159,6 +158,7 @@ Rebuild them with:
 
 ```bash
 python src/data/ingest_mbpp.py --workers 8
+python src/data/ingest_humaneval.py --workers 8
 python src/transforms/generate_pairs.py --max-subset-size 3 --workers 8
 python src/eval/run_baselines.py --split val
 ```
@@ -168,7 +168,9 @@ own tests and drops the ones that fail — 7 of 974 did). Pair generation is the
 slow step, since it verifies every candidate rewrite through the test runner.
 
 MBPP is *Program Synthesis with Large Language Models*, Austin et al. 2021,
-distributed as `google-research-datasets/mbpp` under CC-BY-4.0.
+distributed as `google-research-datasets/mbpp` under CC-BY-4.0. HumanEval is
+*Evaluating Large Language Models Trained on Code*, Chen et al. 2021,
+distributed as `openai/openai_humaneval` under the MIT licence.
 
 ## Layout
 

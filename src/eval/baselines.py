@@ -72,23 +72,25 @@ def rule_based_rewriter(code: str, direction: str) -> str:
     so it is worth making it as strong as the transform set allows rather than
     leaving it a straw man.
 
-    The two directions are not symmetric, but not in the direction intuition
-    suggests. The obvious story is that going terse is easy (delete docstrings
-    and annotations, shorten names) while going verbose is hard (the
-    information being added is not recoverable from the code). Measured on the
-    MBPP validation split, this baseline hits the target style 36% of the time
-    going verbose and only 15% going terse.
+    The two directions are asymmetric, and watching that asymmetry move with
+    the corpus is the clearest evidence in the project that per-direction
+    reporting is worth the trouble.
 
-    The reason is the corpus, not the task: MBPP solutions mostly arrive with
-    no docstrings and no type annotations, so two of the three terse-direction
-    transforms have nothing to delete and only renaming fires -- which on its
-    own rarely flips a majority of the style proxies. The verbose direction's
-    two structural expansions change line and token counts every time they
-    fire, so they clear the majority vote more often.
+    On the MBPP-only corpus this baseline scored 15% going terse against 36%
+    going verbose -- backwards from the obvious story, in which terse is easy
+    (delete docstrings and annotations, shorten names) and verbose is hard
+    (the added information is not recoverable from the code). The diagnosis was
+    that this said nothing about the task and everything about the data: 0.0%
+    of MBPP solutions carry a docstring or a type annotation, so two of the
+    three terse-direction transforms had nothing to delete and only renaming
+    fired, which on its own rarely flips a majority of the style proxies.
 
-    Worth keeping in the writeup: "terse is the easy direction" is true of the
-    *task* and false of this *baseline on this corpus*, and only measuring
-    per-direction shows the difference.
+    Adding HumanEval (99.4% docstrings, 36.6% annotations) tested that
+    prediction. Terse went 15% -> 45% and the ordering flipped back to the
+    intuitive one, 45% terse against 22% verbose.
+
+    So the headline style number is partly a statement about the corpus, and a
+    single averaged figure would have hidden the whole effect.
     """
     if direction == "to_terse":
         code = strip_comments_and_docstrings(code)
