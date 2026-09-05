@@ -100,6 +100,14 @@ def main() -> None:
     model.print_trainable_parameters()
 
     use_cuda = torch.cuda.is_available()
+
+    # transformers 5.x dropped warmup_ratio in favour of warmup_steps, so work
+    # the step count out here rather than hard-coding one that would be wrong
+    # whenever the dataset size or batch settings change.
+    steps_per_epoch = max(1, len(train_examples) // (args.batch_size * args.grad_accum))
+    total_steps = max(1, int(steps_per_epoch * args.epochs))
+    warmup_steps = max(1, int(total_steps * 0.03))
+
     training_args = Seq2SeqTrainingArguments(
         output_dir=args.output,
         num_train_epochs=args.epochs,
@@ -107,7 +115,7 @@ def main() -> None:
         per_device_eval_batch_size=args.batch_size,
         gradient_accumulation_steps=args.grad_accum,
         learning_rate=args.lr,
-        warmup_ratio=0.03,
+        warmup_steps=warmup_steps,
         lr_scheduler_type="cosine",
         logging_steps=25,
         eval_strategy="epoch",
